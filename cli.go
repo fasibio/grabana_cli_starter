@@ -2,14 +2,23 @@ package grabanaclistarter
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
+	"path"
 	"strings"
+	"syscall"
 
 	"github.com/K-Phoen/grabana"
 	"github.com/K-Phoen/grabana/dashboard"
+	"github.com/K-Phoen/grabana/datasource/prometheus"
 	"github.com/cryptvault-cloud/helper"
+	"github.com/docker/go-connections/nat"
+	"github.com/google/uuid"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 	"github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v2"
 )
@@ -17,15 +26,19 @@ import (
 type CliValues = string
 
 const (
-	CliServer         CliValues = "server"
-	CliApiKey         CliValues = "apikey"
-	CliFolderName     CliValues = "foldername"
-	CliYamlTargetFile CliValues = "file"
+	CliServer            CliValues = "server"
+	CliApiKey            CliValues = "apikey"
+	CliFolderName        CliValues = "foldername"
+	CliYamlTargetFile    CliValues = "file"
+	CliDevDatasourceName string    = "datasource_name"
 )
+
+//go:embed prometheus.yml.tmpl
+var prometheusTmpl []byte
 
 type Option func(runner *Runner, app *cli.App) error
 
-type DashboardCreator func(folderName string) (dashboard.Builder, error)
+type DashboardCreator func(folderName string, c *cli.Context) (dashboard.Builder, error)
 
 func DashboardBuilder(d DashboardCreator) Option {
 	return func(runner *Runner, app *cli.App) error {
@@ -92,6 +105,25 @@ func NewCli(appName string, options ...Option) (*cli.App, error) {
 					},
 				},
 			},
+			{
+				Name:  "dev",
+				After: runner.startDev,
+				Subcommands: []*cli.Command{
+					{
+						Name:   "init",
+						Usage:  "Generate template prometheus folder/file to configure scrape stuff for local dev server (DO NOT move this files and start dev server from same path)",
+						Action: runner.InitDev,
+					},
+				},
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     CliDevDatasourceName,
+						EnvVars:  []string{getFlagEnvByFlagName(CliDevDatasourceName, appName)},
+						Aliases:  []string{"datasource"},
+						Required: true,
+					},
+				},
+			},
 		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -125,11 +157,12 @@ func (r *Runner) Before(c *cli.Context) error {
 
 	r.Ctx = context.Background()
 	r.Client = grabana.NewClient(&http.Client{}, c.String(CliServer), grabana.WithAPIToken(c.String(CliApiKey)))
+
 	return nil
 }
 
 func (r *Runner) Destroy(c *cli.Context) error {
-	board, err := r.Dashboard(c.String(CliFolderName))
+	board, err := r.Dashboard(c.String(CliFolderName), c)
 	if err != nil {
 		return err
 	}
@@ -141,7 +174,7 @@ func (r *Runner) Apply(c *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("Could not find or create folder: %w\n", err)
 	}
-	board, err := r.Dashboard(c.String(CliFolderName))
+	board, err := r.Dashboard(c.String(CliFolderName), c)
 	if err != nil {
 		return err
 	}
@@ -166,7 +199,7 @@ func (r *Runner) ToYaml(c *cli.Context) error {
 }
 
 func (r *Runner) Plan(c *cli.Context) error {
-	board, err := r.Dashboard(c.String(CliFolderName))
+	board, err := r.Dashboard(c.String(CliFolderName), c)
 	if err != nil {
 		return err
 	}
@@ -176,5 +209,155 @@ func (r *Runner) Plan(c *cli.Context) error {
 	}
 
 	fmt.Println(string(json))
+	return nil
+}
+
+// EnsureDir checks if given directory exist, creates if not
+func EnsureDir(dir string) error {
+	if !DirExist(dir) {
+		err := os.Mkdir(dir, 0755)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DirExist checks if directory exist
+func DirExist(dir string) bool {
+	_, err := os.Stat(dir)
+	if err == nil {
+		return true
+	}
+	return !os.IsNotExist(err)
+}
+func (r *Runner) InitDev(c *cli.Context) error {
+
+	err := EnsureDir("./prometheus")
+	if err != nil {
+		return err
+	}
+	if !DirExist("./prometheus/prometheus.yml") {
+		err = os.WriteFile("./prometheus/prometheus.yml", prometheusTmpl, os.ModePerm)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Runner) startDev(c *cli.Context) error {
+	err := r.InitDev(c)
+	if err != nil {
+		return err
+	}
+	done := make(chan os.Signal, 1)
+	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
+	ctx := context.Background()
+	pwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
+	networkName := "grabana_dev"
+	newNetwork, err := testcontainers.GenericNetwork(ctx, testcontainers.GenericNetworkRequest{
+		ProviderType: testcontainers.ProviderDocker,
+		NetworkRequest: testcontainers.NetworkRequest{
+			Name:           networkName,
+			CheckDuplicate: true,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := newNetwork.Remove(ctx); err != nil {
+			panic(err)
+		}
+	}()
+
+	prometheusContainerName := "prometheus_" + uuid.New().String()
+	prometheusPort := "9090/tcp"
+	req := testcontainers.ContainerRequest{
+		Name:         prometheusContainerName,
+		Image:        "prom/prometheus:latest",
+		ExposedPorts: []string{prometheusPort},
+
+		Mounts: testcontainers.ContainerMounts{
+			testcontainers.BindMount(path.Join(pwd, "prometheus"), "/etc/prometheus"),
+		},
+		Privileged: true,
+		Networks:   []string{networkName},
+		WaitingFor: wait.ForListeningPort(nat.Port(prometheusPort)),
+	}
+
+	prometheusC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		return err
+	}
+	grafanaPort := "3000/tcp"
+	req2 := testcontainers.ContainerRequest{
+		Image:        "grafana/grafana:latest",
+		ExposedPorts: []string{grafanaPort},
+
+		Mounts: testcontainers.ContainerMounts{
+			testcontainers.BindMount(path.Join(pwd, "prometheus"), "/etc/prometheus"),
+		},
+		Networks:   []string{networkName},
+		WaitingFor: wait.ForListeningPort(nat.Port(grafanaPort)),
+	}
+	grafanaC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req2,
+		Started:          true,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := grafanaC.Terminate(ctx); err != nil {
+			panic(err)
+		}
+	}()
+	defer func() {
+		if err := prometheusC.Terminate(ctx); err != nil {
+			panic(err)
+		}
+	}()
+	grafanaUrl, err := grafanaC.PortEndpoint(ctx, nat.Port(grafanaPort), "http")
+	if err != nil {
+		return err
+	}
+	prometheusUrl, err := prometheusC.PortEndpoint(ctx, nat.Port(prometheusPort), "http")
+	if err != nil {
+		return err
+	}
+	client := grabana.NewClient(&http.Client{}, grafanaUrl, grabana.WithBasicAuth("admin", "admin"))
+	prometheusDatasource, err := prometheus.New(c.String(CliDevDatasourceName), fmt.Sprintf("http://%s:9090", prometheusContainerName))
+	if err != nil {
+		return err
+	}
+	err = client.UpsertDatasource(r.Ctx, prometheusDatasource)
+	if err != nil {
+		return err
+	}
+	apiKey, err := client.CreateAPIKey(r.Ctx, grabana.CreateAPIKeyRequest{
+		Name:          "Grabana_debug",
+		Role:          grabana.AdminRole,
+		SecondsToLive: 0,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Prometheus endpoint: %s \n", prometheusUrl)
+	fmt.Printf("Grafana endpoint: %s \n", grafanaUrl)
+	fmt.Printf("\tGrafana user: admin \n")
+	fmt.Printf("\tGrafana password: admin \n")
+	fmt.Printf("\tPrometheus Datasourcename: %s\n", c.String(CliDevDatasourceName))
+	fmt.Printf("\tApi key: %s \n", apiKey)
+	fmt.Printf("Simple run\n go run . --server %s --apikey %s apply\n", grafanaUrl, apiKey)
+	<-done
 	return nil
 }
