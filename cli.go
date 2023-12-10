@@ -25,12 +25,14 @@ const (
 
 type Option func(runner *Runner, app *cli.App) error
 
-func DashboardBuilder(board *dashboard.Builder) Option {
+type DashboardCreator func(folderName string) (dashboard.Builder, error)
+
+func DashboardBuilder(d DashboardCreator) Option {
 	return func(runner *Runner, app *cli.App) error {
 		if runner.Dashboard != nil {
 			return fmt.Errorf("Dashboard already set")
 		}
-		runner.Dashboard = board
+		runner.Dashboard = d
 		return nil
 	}
 }
@@ -53,7 +55,7 @@ func DefaultCliFlagValue(key CliValues, value string) Option {
 type Runner struct {
 	Client    *grabana.Client
 	Ctx       context.Context
-	Dashboard *dashboard.Builder
+	Dashboard DashboardCreator
 }
 
 func getFlagEnvByFlagName(flagName, appName string) string {
@@ -127,7 +129,11 @@ func (r *Runner) Before(c *cli.Context) error {
 }
 
 func (r *Runner) Destroy(c *cli.Context) error {
-	return r.Client.DeleteDashboard(r.Ctx, r.Dashboard.Internal().UID)
+	board, err := r.Dashboard(c.String(CliFolderName))
+	if err != nil {
+		return err
+	}
+	return r.Client.DeleteDashboard(r.Ctx, board.Internal().UID)
 }
 
 func (r *Runner) Apply(c *cli.Context) error {
@@ -135,8 +141,11 @@ func (r *Runner) Apply(c *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("Could not find or create folder: %w\n", err)
 	}
-
-	dash, err := r.Client.UpsertDashboard(r.Ctx, folder, *r.Dashboard)
+	board, err := r.Dashboard(c.String(CliFolderName))
+	if err != nil {
+		return err
+	}
+	dash, err := r.Client.UpsertDashboard(r.Ctx, folder, board)
 	if err != nil {
 		return fmt.Errorf("Could not create dashboard: %w\n", err)
 	}
@@ -157,7 +166,11 @@ func (r *Runner) ToYaml(c *cli.Context) error {
 }
 
 func (r *Runner) Plan(c *cli.Context) error {
-	json, err := r.Dashboard.MarshalIndentJSON()
+	board, err := r.Dashboard(c.String(CliFolderName))
+	if err != nil {
+		return err
+	}
+	json, err := board.MarshalIndentJSON()
 	if err != nil {
 		return err
 	}
