@@ -3,6 +3,7 @@ package grabanaclistarter
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -38,7 +39,7 @@ var prometheusTmpl []byte
 
 type Option func(runner *Runner, app *cli.App) error
 
-type DashboardCreator func(folderName string, c *cli.Context) (dashboard.Builder, error)
+type DashboardCreator func(folderName string, c *cli.Context) ([]dashboard.Builder, error)
 
 func DashboardBuilder(d DashboardCreator) Option {
 	return func(runner *Runner, app *cli.App) error {
@@ -50,17 +51,47 @@ func DashboardBuilder(d DashboardCreator) Option {
 	}
 }
 
-func DefaultCliFlagValue(key CliValues, value string) Option {
+func DefaultDevRunDataSource(value string) Option {
 	return func(runner *Runner, app *cli.App) error {
-		for _, f := range app.Flags {
-			if helper.Includes(f.Names(), func(name string) bool { return name == key }) {
-				strFlag, ok := f.(*cli.StringFlag)
-				if !ok {
-					return fmt.Errorf("Oh shit something big goes wrong")
+		for _, c := range app.Commands {
+			if c.Name == "dev" {
+				for _, sc := range c.Subcommands {
+					if sc.Name == "run" {
+						for _, f := range sc.Flags {
+							if helper.Includes(f.Names(), func(name string) bool { return name == CliDevDatasourceName }) {
+								strFlag, ok := f.(*cli.StringFlag)
+								if !ok {
+									return fmt.Errorf("Oh shit something big goes wrong")
+								}
+								strFlag.Value = value
+							}
+						}
+					}
 				}
-				strFlag.Value = value
+
 			}
 		}
+
+		return nil
+	}
+}
+
+func DefaultDashboardCliFlagValue(key CliValues, value string) Option {
+	return func(runner *Runner, app *cli.App) error {
+		for _, c := range app.Commands {
+			if c.Name == "dashboard" {
+				for _, f := range c.Flags {
+					if helper.Includes(f.Names(), func(name string) bool { return name == key }) {
+						strFlag, ok := f.(*cli.StringFlag)
+						if !ok {
+							return fmt.Errorf("Oh shit something big goes wrong")
+						}
+						strFlag.Value = value
+					}
+				}
+			}
+		}
+
 		return nil
 	}
 }
@@ -71,27 +102,55 @@ type Runner struct {
 	Dashboard DashboardCreator
 }
 
-func getFlagEnvByFlagName(flagName, appName string) string {
+func GetFlagEnvByFlagName(flagName, appName string) string {
 	return fmt.Sprintf("%s_%s", appName, strings.ToUpper(flagName))
 }
 
 func NewCli(appName string, options ...Option) (*cli.App, error) {
 	runner := Runner{}
 	app := &cli.App{
-		Usage:  "vault-server",
-		Before: runner.Before,
+		Usage: "vault-server",
+
 		Commands: []*cli.Command{
 			{
-				Name:   "apply",
-				Action: runner.Apply,
-			},
-			{
-				Name:   "destroy",
-				Action: runner.Destroy,
-			},
-			{
-				Name:   "plan",
-				Action: runner.Plan,
+				Name:   "dashboard",
+				Usage:  "To apply destroy and plan current dashboard",
+				Before: runner.Before,
+				Subcommands: []*cli.Command{
+					{
+						Name:   "apply",
+						Action: runner.Apply,
+						Usage:  "Upload Dashboard to target configuration",
+					},
+					{
+						Name:   "destroy",
+						Action: runner.Destroy,
+						Usage:  "Remove Dashboard from target configuration",
+					},
+					{
+						Name:   "plan",
+						Action: runner.Plan,
+						Usage:  "Upload Dashboard to target configuration",
+					},
+				},
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    CliFolderName,
+						EnvVars: []string{GetFlagEnvByFlagName(CliFolderName, appName)},
+						Usage:   "GrafanaFolder to create dashboards",
+					},
+					&cli.StringFlag{
+						Name:    CliServer,
+						EnvVars: []string{GetFlagEnvByFlagName(CliServer, appName)},
+						Usage:   "grafana url",
+					},
+					&cli.StringFlag{
+						Name:     CliApiKey,
+						EnvVars:  []string{GetFlagEnvByFlagName(CliApiKey, appName)},
+						Required: true,
+						Usage:    "grafana api key",
+					},
+				},
 			},
 			{
 				Name:   "toYaml",
@@ -99,48 +158,34 @@ func NewCli(appName string, options ...Option) (*cli.App, error) {
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:    CliYamlTargetFile,
-						EnvVars: []string{getFlagEnvByFlagName(CliYamlTargetFile, appName)},
+						EnvVars: []string{GetFlagEnvByFlagName(CliYamlTargetFile, appName)},
 						Value:   "target.yml",
 						Usage:   "file to save yaml",
 					},
 				},
 			},
 			{
-				Name:  "dev",
-				After: runner.startDev,
+				Name: "dev",
 				Subcommands: []*cli.Command{
 					{
 						Name:   "init",
 						Usage:  "Generate template prometheus folder/file to configure scrape stuff for local dev server (DO NOT move this files and start dev server from same path)",
 						Action: runner.InitDev,
 					},
-				},
-				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:     CliDevDatasourceName,
-						EnvVars:  []string{getFlagEnvByFlagName(CliDevDatasourceName, appName)},
-						Aliases:  []string{"datasource"},
-						Required: true,
+					{
+						Name:  "run",
+						Usage: "Start DEV prometheus and grafana",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:     CliDevDatasourceName,
+								EnvVars:  []string{GetFlagEnvByFlagName(CliDevDatasourceName, appName)},
+								Aliases:  []string{"datasource"},
+								Required: true,
+							},
+						},
+						After: runner.startDev,
 					},
 				},
-			},
-		},
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:    CliFolderName,
-				EnvVars: []string{getFlagEnvByFlagName(CliFolderName, appName)},
-				Usage:   "GrafanaFolder to create dashboards",
-			},
-			&cli.StringFlag{
-				Name:    CliServer,
-				EnvVars: []string{getFlagEnvByFlagName(CliServer, appName)},
-				Usage:   "grafana url",
-			},
-			&cli.StringFlag{
-				Name:     CliApiKey,
-				EnvVars:  []string{getFlagEnvByFlagName(CliApiKey, appName)},
-				Required: true,
-				Usage:    "grafana api key",
 			},
 		},
 	}
@@ -166,7 +211,15 @@ func (r *Runner) Destroy(c *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	return r.Client.DeleteDashboard(r.Ctx, board.Internal().UID)
+
+	err = errors.Join(nil)
+	for _, b := range board {
+		tmpErr := r.Client.DeleteDashboard(r.Ctx, b.Internal().UID)
+		if tmpErr != nil {
+			err = errors.Join(err, fmt.Errorf("Error by %s: %w", b.Internal().UID, tmpErr))
+		}
+	}
+	return err
 }
 
 func (r *Runner) Apply(c *cli.Context) error {
@@ -178,13 +231,16 @@ func (r *Runner) Apply(c *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	dash, err := r.Client.UpsertDashboard(r.Ctx, folder, board)
-	if err != nil {
-		return fmt.Errorf("Could not create dashboard: %w\n", err)
+	err = errors.Join(nil)
+	for _, b := range board {
+		dash, tmpErr := r.Client.UpsertDashboard(r.Ctx, folder, b)
+		if err != nil {
+			err = errors.Join(err, fmt.Errorf("Could not create dashboard: %w\n", tmpErr))
+		} else {
+			fmt.Printf("The deed is done:\n%s\n", c.String(CliServer)+dash.URL)
+		}
 	}
-
-	fmt.Printf("The deed is done:\n%s\n", c.String(CliServer)+dash.URL)
-	return nil
+	return err
 }
 func (r *Runner) ToYaml(c *cli.Context) error {
 
@@ -203,13 +259,17 @@ func (r *Runner) Plan(c *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	json, err := board.MarshalIndentJSON()
-	if err != nil {
-		return err
+	err = errors.Join(nil)
+
+	for _, b := range board {
+		json, tmpErr := b.MarshalIndentJSON()
+		if err != nil {
+			err = errors.Join(err, fmt.Errorf("Error by %s: %w", b.Internal().UID, tmpErr))
+		}
+		fmt.Println(string(json))
 	}
 
-	fmt.Println(string(json))
-	return nil
+	return err
 }
 
 // EnsureDir checks if given directory exist, creates if not
@@ -298,6 +358,11 @@ func (r *Runner) startDev(c *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err := prometheusC.Terminate(ctx); err != nil {
+			panic(err)
+		}
+	}()
 	grafanaPort := "3000/tcp"
 	req2 := testcontainers.ContainerRequest{
 		Image:        "grafana/grafana:latest",
@@ -321,11 +386,7 @@ func (r *Runner) startDev(c *cli.Context) error {
 			panic(err)
 		}
 	}()
-	defer func() {
-		if err := prometheusC.Terminate(ctx); err != nil {
-			panic(err)
-		}
-	}()
+
 	grafanaUrl, err := grafanaC.PortEndpoint(ctx, nat.Port(grafanaPort), "http")
 	if err != nil {
 		return err
@@ -357,7 +418,7 @@ func (r *Runner) startDev(c *cli.Context) error {
 	fmt.Printf("\tGrafana password: admin \n")
 	fmt.Printf("\tPrometheus Datasourcename: %s\n", c.String(CliDevDatasourceName))
 	fmt.Printf("\tApi key: %s \n", apiKey)
-	fmt.Printf("Simple run\n go run . --server %s --apikey %s apply\n", grafanaUrl, apiKey)
+	fmt.Printf("Simple run\n go run . dashboard --server %s --apikey %s apply\n", grafanaUrl, apiKey)
 	<-done
 	return nil
 }
