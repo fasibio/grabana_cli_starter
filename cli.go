@@ -80,15 +80,18 @@ func DefaultDashboardCliFlagValue(key CliValues, value string) Option {
 	return func(runner *Runner, app *cli.App) error {
 		for _, c := range app.Commands {
 			if c.Name == "dashboard" {
-				for _, f := range c.Flags {
-					if helper.Includes(f.Names(), func(name string) bool { return name == key }) {
-						strFlag, ok := f.(*cli.StringFlag)
-						if !ok {
-							return fmt.Errorf("Oh shit something big goes wrong")
+				for _, c1 := range c.Subcommands {
+					for _, f := range c1.Flags {
+						if helper.Includes(f.Names(), func(name string) bool { return name == key }) {
+							strFlag, ok := f.(*cli.StringFlag)
+							if !ok {
+								return fmt.Errorf("Oh shit something big goes wrong")
+							}
+							strFlag.Value = value
+							strFlag.Required = false
 						}
-						strFlag.Value = value
-						strFlag.Required = false
 					}
+
 				}
 			}
 		}
