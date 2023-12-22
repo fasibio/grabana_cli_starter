@@ -87,6 +87,7 @@ func DefaultDashboardCliFlagValue(key CliValues, value string) Option {
 							return fmt.Errorf("Oh shit something big goes wrong")
 						}
 						strFlag.Value = value
+						strFlag.Required = false
 					}
 				}
 			}
