@@ -64,6 +64,7 @@ func DefaultDevRunDataSource(value string) Option {
 									return fmt.Errorf("Oh shit something big goes wrong")
 								}
 								strFlag.Value = value
+								strFlag.Required = false
 							}
 						}
 					}
@@ -80,18 +81,14 @@ func DefaultDashboardCliFlagValue(key CliValues, value string) Option {
 	return func(runner *Runner, app *cli.App) error {
 		for _, c := range app.Commands {
 			if c.Name == "dashboard" {
-				for _, c1 := range c.Subcommands {
-					for _, f := range c1.Flags {
-						if helper.Includes(f.Names(), func(name string) bool { return name == key }) {
-							strFlag, ok := f.(*cli.StringFlag)
-							if !ok {
-								return fmt.Errorf("Oh shit something big goes wrong")
-							}
-							strFlag.Value = value
-							strFlag.Required = false
+				for _, f := range c.Flags {
+					if helper.Includes(f.Names(), func(name string) bool { return name == key }) {
+						strFlag, ok := f.(*cli.StringFlag)
+						if !ok {
+							return fmt.Errorf("Oh shit something big goes wrong")
 						}
+						strFlag.Value = value
 					}
-
 				}
 			}
 		}
@@ -169,7 +166,8 @@ func NewCli(appName string, options ...Option) (*cli.App, error) {
 				},
 			},
 			{
-				Name: "dev",
+				Name:   "dev",
+				Before: runner.BeforeDev,
 				Subcommands: []*cli.Command{
 					{
 						Name:   "init",
@@ -200,6 +198,14 @@ func NewCli(appName string, options ...Option) (*cli.App, error) {
 		}
 	}
 	return app, nil
+}
+
+func (r *Runner) BeforeDev(c *cli.Context) error {
+
+	r.Ctx = context.Background()
+	r.Client = grabana.NewClient(&http.Client{}, c.String(CliServer), grabana.WithAPIToken(c.String(CliApiKey)))
+
+	return nil
 }
 
 func (r *Runner) Before(c *cli.Context) error {
@@ -273,7 +279,7 @@ func (r *Runner) Plan(c *cli.Context) error {
 		fmt.Println(string(json))
 	}
 
-	return err
+	return nil
 }
 
 // EnsureDir checks if given directory exist, creates if not
@@ -360,7 +366,7 @@ func (r *Runner) startDev(c *cli.Context) error {
 		Started:          true,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("error start prometheus: %w", err)
 	}
 	defer func() {
 		if err := prometheusC.Terminate(ctx); err != nil {
@@ -383,7 +389,7 @@ func (r *Runner) startDev(c *cli.Context) error {
 		Started:          true,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("error start Grafana %w", err)
 	}
 	defer func() {
 		if err := grafanaC.Terminate(ctx); err != nil {
@@ -393,11 +399,11 @@ func (r *Runner) startDev(c *cli.Context) error {
 
 	grafanaUrl, err := grafanaC.PortEndpoint(ctx, nat.Port(grafanaPort), "http")
 	if err != nil {
-		return err
+		return fmt.Errorf("error get grafana endpoint: %w", err)
 	}
 	prometheusUrl, err := prometheusC.PortEndpoint(ctx, nat.Port(prometheusPort), "http")
 	if err != nil {
-		return err
+		return fmt.Errorf("error get prometheus endpoint: %w", err)
 	}
 	client := grabana.NewClient(&http.Client{}, grafanaUrl, grabana.WithBasicAuth("admin", "admin"))
 	prometheusDatasource, err := prometheus.New(c.String(CliDevDatasourceName), fmt.Sprintf("http://%s:9090", prometheusContainerName))
@@ -406,7 +412,7 @@ func (r *Runner) startDev(c *cli.Context) error {
 	}
 	err = client.UpsertDatasource(r.Ctx, prometheusDatasource)
 	if err != nil {
-		return err
+		return fmt.Errorf("error create prometheus datasource at grafana: %w ", err)
 	}
 	apiKey, err := client.CreateAPIKey(r.Ctx, grabana.CreateAPIKeyRequest{
 		Name:          "Grabana_debug",
@@ -414,7 +420,8 @@ func (r *Runner) startDev(c *cli.Context) error {
 		SecondsToLive: 0,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("error create APIKey datasource at grafana: %w", err)
+
 	}
 	fmt.Printf("Prometheus endpoint: %s \n", prometheusUrl)
 	fmt.Printf("Grafana endpoint: %s \n", grafanaUrl)
