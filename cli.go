@@ -16,6 +16,8 @@ import (
 	"github.com/K-Phoen/grabana/dashboard"
 	"github.com/K-Phoen/grabana/datasource/prometheus"
 	"github.com/cryptvault-cloud/helper"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
 	"github.com/testcontainers/testcontainers-go"
@@ -352,9 +354,8 @@ func (r *Runner) startDev(c *cli.Context) error {
 		Name:         prometheusContainerName,
 		Image:        "prom/prometheus:latest",
 		ExposedPorts: []string{prometheusPort},
-
-		Mounts: testcontainers.ContainerMounts{
-			testcontainers.BindMount(path.Join(pwd, "prometheus"), "/etc/prometheus"),
+		HostConfigModifier: func(hc *container.HostConfig) {
+			hc.Mounts = append(hc.Mounts, mount.Mount{Source: path.Join(pwd, "prometheus"), Target: "/etc/prometheus", Type: mount.TypeBind})
 		},
 		Privileged: true,
 		Networks:   []string{networkName},
@@ -377,12 +378,8 @@ func (r *Runner) startDev(c *cli.Context) error {
 	req2 := testcontainers.ContainerRequest{
 		Image:        "grafana/grafana:latest",
 		ExposedPorts: []string{grafanaPort},
-
-		Mounts: testcontainers.ContainerMounts{
-			testcontainers.BindMount(path.Join(pwd, "prometheus"), "/etc/prometheus"),
-		},
-		Networks:   []string{networkName},
-		WaitingFor: wait.ForListeningPort(nat.Port(grafanaPort)),
+		Networks:     []string{networkName},
+		WaitingFor:   wait.ForListeningPort(nat.Port(grafanaPort)),
 	}
 	grafanaC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req2,
