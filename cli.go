@@ -246,7 +246,7 @@ func (r *Runner) Apply(c *cli.Context) error {
 	err = errors.Join(nil)
 	for _, b := range board {
 		dash, tmpErr := r.Client.UpsertDashboard(r.Ctx, folder, b)
-		if err != nil {
+		if tmpErr != nil {
 			err = errors.Join(err, fmt.Errorf("Could not create dashboard: %w\n", tmpErr))
 		} else {
 			fmt.Printf("The deed is done:\n%s\n", c.String(CliServer)+dash.URL)
@@ -275,7 +275,7 @@ func (r *Runner) Plan(c *cli.Context) error {
 
 	for _, b := range board {
 		json, tmpErr := b.MarshalIndentJSON()
-		if err != nil {
+		if tmpErr != nil {
 			err = errors.Join(err, fmt.Errorf("Error by %s: %w", b.Internal().UID, tmpErr))
 		}
 		fmt.Println(string(json))
