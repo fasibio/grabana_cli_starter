@@ -5,6 +5,7 @@ package recordingrules
 import (
 	"crypto/md5"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 
@@ -120,6 +121,8 @@ func (m *RecodingMap) record(name, expr string) [16]byte {
 			Name: name,
 			Expr: expr,
 		}
+	} else {
+		log.Printf("Same expr found. Rule found under name: %s. will use this also for %s \n", m.data[hash].Name, name)
 	}
 	return hash
 }
