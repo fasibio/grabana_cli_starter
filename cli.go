@@ -18,9 +18,11 @@ import (
 	"github.com/cryptvault-cloud/helper"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
 	"github.com/testcontainers/testcontainers-go"
+	testContainerNetwork "github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v2"
@@ -34,6 +36,8 @@ const (
 	CliFolderName        CliValues = "foldername"
 	CliYamlTargetFile    CliValues = "file"
 	CliDevDatasourceName string    = "datasource_name"
+	CliDevSubnet         string    = "subnet"
+	CliDevGateway                  = "gateway"
 )
 
 //go:embed prometheus.yml.tmpl
@@ -186,6 +190,16 @@ func NewCli(appName string, options ...Option) (*cli.App, error) {
 								Aliases:  []string{"datasource"},
 								Required: true,
 							},
+							&cli.StringFlag{
+								Name:    CliDevSubnet,
+								EnvVars: []string{GetFlagEnvByFlagName(CliDevSubnet, appName)},
+								Value:   "192.168.192.0/20",
+							},
+							&cli.StringFlag{
+								Name:    CliDevGateway,
+								EnvVars: []string{GetFlagEnvByFlagName(CliDevGateway, appName)},
+								Value:   "192.168.192.1",
+							},
 						},
 						After: runner.startDev,
 					},
@@ -203,7 +217,6 @@ func NewCli(appName string, options ...Option) (*cli.App, error) {
 }
 
 func (r *Runner) BeforeDev(c *cli.Context) error {
-
 	r.Ctx = context.Background()
 	r.Client = grabana.NewClient(&http.Client{}, c.String(CliServer), grabana.WithAPIToken(c.String(CliApiKey)))
 
@@ -330,15 +343,18 @@ func (r *Runner) startDev(c *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	newNetwork, err := testContainerNetwork.New(ctx,
+		testContainerNetwork.WithIPAM(&network.IPAM{
+			Config: []network.IPAMConfig{
+				{
+					Subnet:  c.String(CliDevSubnet),
+					Gateway: c.String(CliDevGateway),
+				},
+			},
+		}),
+		testContainerNetwork.WithCheckDuplicate(),
+	)
 
-	networkName := "grabana_dev"
-	newNetwork, err := testcontainers.GenericNetwork(ctx, testcontainers.GenericNetworkRequest{
-		ProviderType: testcontainers.ProviderDocker,
-		NetworkRequest: testcontainers.NetworkRequest{
-			Name:           networkName,
-			CheckDuplicate: true,
-		},
-	})
 	if err != nil {
 		return err
 	}
@@ -354,11 +370,18 @@ func (r *Runner) startDev(c *cli.Context) error {
 		Name:         prometheusContainerName,
 		Image:        "prom/prometheus:latest",
 		ExposedPorts: []string{prometheusPort},
+		Cmd: []string{
+			"--config.file=/etc/prometheus/prometheus.yml",
+			"--storage.tsdb.path=/prometheus",
+			"--web.console.libraries=/usr/share/prometheus/console_libraries",
+			"--web.console.templates=/usr/share/prometheus/consoles",
+			"--web.enable-lifecycle",
+		},
 		HostConfigModifier: func(hc *container.HostConfig) {
 			hc.Mounts = append(hc.Mounts, mount.Mount{Source: path.Join(pwd, "prometheus"), Target: "/etc/prometheus", Type: mount.TypeBind})
 		},
 		Privileged: true,
-		Networks:   []string{networkName},
+		Networks:   []string{newNetwork.Name},
 		WaitingFor: wait.ForListeningPort(nat.Port(prometheusPort)),
 	}
 
@@ -378,7 +401,7 @@ func (r *Runner) startDev(c *cli.Context) error {
 	req2 := testcontainers.ContainerRequest{
 		Image:        "grafana/grafana:latest",
 		ExposedPorts: []string{grafanaPort},
-		Networks:     []string{networkName},
+		Networks:     []string{newNetwork.Name},
 		WaitingFor:   wait.ForListeningPort(nat.Port(grafanaPort)),
 	}
 	grafanaC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -421,6 +444,7 @@ func (r *Runner) startDev(c *cli.Context) error {
 
 	}
 	fmt.Printf("Prometheus endpoint: %s \n", prometheusUrl)
+	fmt.Printf("\tReload Config: curl -s -XPOST %s/-/reload\n ", prometheusUrl)
 	fmt.Printf("Grafana endpoint: %s \n", grafanaUrl)
 	fmt.Printf("\tGrafana user: admin \n")
 	fmt.Printf("\tGrafana password: admin \n")
