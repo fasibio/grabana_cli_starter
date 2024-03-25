@@ -8,6 +8,8 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"regexp"
+	"strings"
 
 	"github.com/K-Phoen/grabana/gauge"
 	"github.com/K-Phoen/grabana/graph"
@@ -114,12 +116,19 @@ func (m *RecodingMap) GetPrometheusGroup(name string) PrometheusGroups {
 	return groups
 }
 
+func (m *RecodingMap) escapeControlSymbols(expr string) string {
+	re := regexp.MustCompile(`\s+`)
+	result := re.ReplaceAllString(expr, " ")
+	return strings.ReplaceAll(strings.ReplaceAll(result, "\n", " "), "\t", " ")
+}
+
 func (m *RecodingMap) record(name, expr string) [16]byte {
-	hash := md5.Sum([]byte(expr))
+	escapedExpr := m.escapeControlSymbols(expr)
+	hash := md5.Sum([]byte(escapedExpr))
 	if _, cached := m.data[hash]; !cached {
 		m.data[hash] = RecordingRule{
 			Name: name,
-			Expr: expr,
+			Expr: escapedExpr,
 		}
 	} else {
 		log.Printf("Same expr found. Rule found under name: %s. will use this also for %s \n", m.data[hash].Name, name)
@@ -148,12 +157,14 @@ func (m *RecodingMap) WithTable(recordName, query string, options ...prometheus.
 		err := table.WithPrometheusTarget(query, append([]prometheus.Option{
 			m.Record(completeRecordName),
 			ShouldShowQuery(!m.debug),
+			prometheus.Ref(recordName),
 		}, options...)...)(t)
 		if err != nil {
 			return err
 		}
 		err = table.WithPrometheusTarget(query, append([]prometheus.Option{
 			ShouldShowQuery(m.debug),
+			prometheus.Ref(fmt.Sprintf("%s_direct", recordName)),
 		}, options...)...)(t)
 		return err
 	}
@@ -165,12 +176,14 @@ func (m *RecodingMap) WithSingleStat(recordName, query string, options ...promet
 		err := singlestat.WithPrometheusTarget(query, append([]prometheus.Option{
 			m.Record(completeRecordName),
 			ShouldShowQuery(!m.debug),
+			prometheus.Ref(recordName),
 		}, options...)...)(t)
 		if err != nil {
 			return err
 		}
 		err = singlestat.WithPrometheusTarget(query, append([]prometheus.Option{
 			ShouldShowQuery(m.debug),
+			prometheus.Ref(fmt.Sprintf("%s_direct", recordName)),
 		}, options...)...)(t)
 		return err
 	}
@@ -182,12 +195,14 @@ func (m *RecodingMap) WithHeatmap(recordName, query string, options ...prometheu
 		err := heatmap.WithPrometheusTarget(query, append([]prometheus.Option{
 			m.Record(completeRecordName),
 			ShouldShowQuery(!m.debug),
+			prometheus.Ref(recordName),
 		}, options...)...)(t)
 		if err != nil {
 			return err
 		}
 		err = heatmap.WithPrometheusTarget(query, append([]prometheus.Option{
 			ShouldShowQuery(m.debug),
+			prometheus.Ref(fmt.Sprintf("%s_direct", recordName)),
 		}, options...)...)(t)
 		return err
 	}
@@ -199,12 +214,14 @@ func (m *RecodingMap) WithStat(recordName, query string, options ...prometheus.O
 		err := stat.WithPrometheusTarget(query, append([]prometheus.Option{
 			m.Record(completeRecordName),
 			ShouldShowQuery(!m.debug),
+			prometheus.Ref(recordName),
 		}, options...)...)(t)
 		if err != nil {
 			return err
 		}
 		err = stat.WithPrometheusTarget(query, append([]prometheus.Option{
 			ShouldShowQuery(m.debug),
+			prometheus.Ref(fmt.Sprintf("%s_direct", recordName)),
 		}, options...)...)(t)
 		return err
 	}
@@ -216,12 +233,14 @@ func (m *RecodingMap) WithGraph(recordName, query string, options ...prometheus.
 		err := graph.WithPrometheusTarget(query, append([]prometheus.Option{
 			m.Record(completeRecordName),
 			ShouldShowQuery(!m.debug),
+			prometheus.Ref(recordName),
 		}, options...)...)(t)
 		if err != nil {
 			return err
 		}
 		err = graph.WithPrometheusTarget(query, append([]prometheus.Option{
 			ShouldShowQuery(m.debug),
+			prometheus.Ref(fmt.Sprintf("%s_direct", recordName)),
 		}, options...)...)(t)
 		return err
 	}
@@ -233,12 +252,14 @@ func (m *RecodingMap) WithGauge(recordName, query string, options ...prometheus.
 		err := gauge.WithPrometheusTarget(query, append([]prometheus.Option{
 			m.Record(completeRecordName),
 			ShouldShowQuery(!m.debug),
+			prometheus.Ref(recordName),
 		}, options...)...)(t)
 		if err != nil {
 			return err
 		}
 		err = gauge.WithPrometheusTarget(query, append([]prometheus.Option{
 			ShouldShowQuery(m.debug),
+			prometheus.Ref(fmt.Sprintf("%s_direct", recordName)),
 		}, options...)...)(t)
 		return err
 	}
@@ -250,12 +271,14 @@ func (m *RecodingMap) WithTimeSeries(recordName, query string, options ...promet
 		err := timeseries.WithPrometheusTarget(query, append([]prometheus.Option{
 			m.Record(completeRecordName),
 			ShouldShowQuery(!m.debug),
+			prometheus.Ref(recordName),
 		}, options...)...)(t)
 		if err != nil {
 			return err
 		}
 		err = timeseries.WithPrometheusTarget(query, append([]prometheus.Option{
 			ShouldShowQuery(m.debug),
+			prometheus.Ref(fmt.Sprintf("%s_direct", recordName)),
 		}, options...)...)(t)
 		return err
 	}
