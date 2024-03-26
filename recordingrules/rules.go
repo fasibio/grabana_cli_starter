@@ -117,9 +117,9 @@ func (m *RecodingMap) GetPrometheusGroup(name string) PrometheusGroups {
 }
 
 func (m *RecodingMap) escapeControlSymbols(expr string) string {
+	result := strings.ReplaceAll(strings.ReplaceAll(expr, "\n", " "), "\t", " ")
 	re := regexp.MustCompile(`\s+`)
-	result := re.ReplaceAllString(expr, " ")
-	return strings.ReplaceAll(strings.ReplaceAll(result, "\n", " "), "\t", " ")
+	return re.ReplaceAllString(result, " ")
 }
 
 func (m *RecodingMap) record(name, expr string) [16]byte {
