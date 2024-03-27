@@ -96,6 +96,17 @@ func DefaultDashboardCliFlagValue(key CliValues, value string) Option {
 						strFlag.Value = value
 					}
 				}
+				for _, s := range c.Subcommands {
+					for _, f := range s.Flags {
+						if helper.Includes(f.Names(), func(name string) bool { return name == key }) {
+							strFlag, ok := f.(*cli.StringFlag)
+							if !ok {
+								return fmt.Errorf("Oh shit something big goes wrong")
+							}
+							strFlag.Value = value
+						}
+					}
+				}
 			}
 		}
 
@@ -115,47 +126,55 @@ func GetFlagEnvByFlagName(flagName, appName string) string {
 
 func NewCli(appName string, options ...Option) (*cli.App, error) {
 	runner := Runner{}
+
+	applyDestroyFlags := []cli.Flag{
+
+		&cli.StringFlag{
+			Name:    CliServer,
+			EnvVars: []string{GetFlagEnvByFlagName(CliServer, appName)},
+			Usage:   "grafana url",
+		},
+		&cli.StringFlag{
+			Name:     CliApiKey,
+			EnvVars:  []string{GetFlagEnvByFlagName(CliApiKey, appName)},
+			Required: true,
+			Usage:    "grafana api key",
+		},
+	}
+
 	app := &cli.App{
 		Usage: "vault-server",
 
 		Commands: []*cli.Command{
 			{
-				Name:   "dashboard",
-				Usage:  "To apply destroy and plan current dashboard",
-				Before: runner.Before,
-				Subcommands: []*cli.Command{
-					{
-						Name:   "apply",
-						Action: runner.Apply,
-						Usage:  "Upload Dashboard to target configuration",
-					},
-					{
-						Name:   "destroy",
-						Action: runner.Destroy,
-						Usage:  "Remove Dashboard from target configuration",
-					},
-					{
-						Name:   "plan",
-						Action: runner.Plan,
-						Usage:  "Upload Dashboard to target configuration",
-					},
-				},
+				Name:  "dashboard",
+				Usage: "To apply destroy and plan current dashboard",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:    CliFolderName,
 						EnvVars: []string{GetFlagEnvByFlagName(CliFolderName, appName)},
 						Usage:   "GrafanaFolder to create dashboards",
 					},
-					&cli.StringFlag{
-						Name:    CliServer,
-						EnvVars: []string{GetFlagEnvByFlagName(CliServer, appName)},
-						Usage:   "grafana url",
+				},
+				Subcommands: []*cli.Command{
+					{
+						Name:   "apply",
+						Before: runner.Before,
+						Action: runner.Apply,
+						Usage:  "Upload Dashboard to target configuration",
+						Flags:  applyDestroyFlags,
 					},
-					&cli.StringFlag{
-						Name:     CliApiKey,
-						EnvVars:  []string{GetFlagEnvByFlagName(CliApiKey, appName)},
-						Required: true,
-						Usage:    "grafana api key",
+					{
+						Name:   "destroy",
+						Action: runner.Destroy,
+						Before: runner.Before,
+						Usage:  "Remove Dashboard from target configuration",
+						Flags:  applyDestroyFlags,
+					},
+					{
+						Name:   "plan",
+						Action: runner.Plan,
+						Usage:  "Upload Dashboard to target configuration",
 					},
 				},
 			},
@@ -201,7 +220,7 @@ func NewCli(appName string, options ...Option) (*cli.App, error) {
 								Value:   "192.168.192.1",
 							},
 						},
-						After: runner.startDev,
+						Action: runner.startDev,
 					},
 				},
 			},
@@ -267,6 +286,7 @@ func (r *Runner) Apply(c *cli.Context) error {
 	}
 	return err
 }
+
 func (r *Runner) ToYaml(c *cli.Context) error {
 
 	filepath := c.String(CliYamlTargetFile)
@@ -450,7 +470,7 @@ func (r *Runner) startDev(c *cli.Context) error {
 	fmt.Printf("\tGrafana password: admin \n")
 	fmt.Printf("\tPrometheus Datasourcename: %s\n", c.String(CliDevDatasourceName))
 	fmt.Printf("\tApi key: %s \n", apiKey)
-	fmt.Printf("Simple run\n go run . dashboard --server %s --apikey %s apply\n", grafanaUrl, apiKey)
+	fmt.Printf("Simple run\n go run . dashboard apply --server %s --apikey %s \n", grafanaUrl, apiKey)
 	<-done
 	return nil
 }

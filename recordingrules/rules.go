@@ -5,6 +5,7 @@ package recordingrules
 import (
 	"crypto/md5"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -81,7 +82,7 @@ func (m *RecodingMap) AppendRule(recordName, query string) {
 	m.record(recordName, query)
 }
 
-func (m *RecodingMap) WritePrometheusRulesYaml(name, filename string, checkOverPromtool bool) error {
+func (m *RecodingMap) WritePrometheusRulesYaml(name, filename string) error {
 	f, err := os.Create(filename)
 	if err != nil {
 		return fmt.Errorf("Error creating PrometheusRule Files: %w", err)
@@ -92,14 +93,14 @@ func (m *RecodingMap) WritePrometheusRulesYaml(name, filename string, checkOverP
 	if err != nil {
 		return err
 	}
-	if checkOverPromtool {
-		cmd := exec.Command("promtool", "check", "rules", filename)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd.Run()
-	}
 	return nil
+}
+
+func (m *RecodingMap) CheckOverPromtool(filename string, outWriter, errWriter io.Writer) error {
+	cmd := exec.Command("promtool", "check", "rules", filename)
+	cmd.Stdout = outWriter
+	cmd.Stderr = errWriter
+	return cmd.Run()
 }
 
 func (m *RecodingMap) GetPrometheusGroup(name string) PrometheusGroups {
@@ -282,34 +283,4 @@ func (m *RecodingMap) WithTimeSeries(recordName, query string, options ...promet
 		}, options...)...)(t)
 		return err
 	}
-	// return []timeseries.Option{
-	// 	timeseries.WithPrometheusTarget(query, append([]prometheus.Option{
-	// 		m.Record(recordName),
-	// 		ShouldShowQuery(!m.debug),
-	// 	}, options...)...),
-	// 	timeseries.WithPrometheusTarget(query, append([]prometheus.Option{
-	// 		ShouldShowQuery(m.debug),
-	// 	}, options...)...),
-	// }
 }
-
-// func (m RecodingMap) Recoding(querySet string) func(t *timeseries.TimeSeries) error {
-// 	return func(t *timeseries.TimeSeries) error {
-// 		test := t.Builder.TimeseriesPanel.Targets
-// 		for _, r := range test {
-
-// 			if _, cached := m[hash]; !cached {
-// 				metricName := r.MetricName
-// 				name := fmt.Sprintf("%s:%s", querySet, metricName)
-// 				m[hash] = RecordingRules{
-// 					Name: name,
-// 					Expr: r.Expr,
-// 				}
-// 			}
-// 			r.Expr = m[hash].Expr
-// 			t.
-// 		}
-// 		return nil
-// 	}
-
-// }
